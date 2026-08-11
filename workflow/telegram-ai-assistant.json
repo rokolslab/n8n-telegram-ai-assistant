@@ -1,0 +1,241 @@
+{
+  "name": "Telegram AI Assistant",
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate"
+  },
+  "connections": {
+    "Telegram Trigger": {
+      "main": [[{"node": "Normalize Message", "type": "main", "index": 0}]]
+    },
+    "Normalize Message": {
+      "main": [[{"node": "Runtime Settings", "type": "main", "index": 0}]]
+    },
+    "Runtime Settings": {
+      "main": [[
+        {"node": "Send Chat Action", "type": "main", "index": 0},
+        {"node": "Wait for Chat Action", "type": "main", "index": 0}
+      ]]
+    },
+    "Send Chat Action": {
+      "main": [[{"node": "Wait for Chat Action", "type": "main", "index": 1}]]
+    },
+    "Wait for Chat Action": {
+      "main": [[{"node": "Route Command", "type": "main", "index": 0}]]
+    },
+    "Route Command": {
+      "main": [
+        [{"node": "Generate Start Reply", "type": "main", "index": 0}],
+        [{"node": "Generate Image", "type": "main", "index": 0}],
+        [{"node": "Send Fallback", "type": "main", "index": 0}]
+      ]
+    },
+    "Generate Start Reply": {
+      "main": [[{"node": "Send Start Reply", "type": "main", "index": 0}]]
+    },
+    "Generate Image": {
+      "main": [[{"node": "Send Generated Image", "type": "main", "index": 0}]]
+    }
+  },
+  "nodes": [
+    {
+      "id": "telegram-trigger",
+      "name": "Telegram Trigger",
+      "type": "n8n-nodes-base.telegramTrigger",
+      "typeVersion": 1.4,
+      "position": [240, 360],
+      "parameters": {
+        "updates": ["message"]
+      }
+    },
+    {
+      "id": "normalize-message",
+      "name": "Normalize Message",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [520, 360],
+      "parameters": {
+        "mode": "manual",
+        "assignments": {
+          "assignments": [
+            {"id": "message-text", "name": "message.text", "value": "={{ $json?.message?.text ?? \"\" }}", "type": "string"},
+            {"id": "message-command", "name": "message.command", "value": "={{ ($json?.message?.text ?? \"\").trim().split(/\\s+/)[0]?.toLowerCase() || \"\" }}", "type": "string"},
+            {"id": "message-prompt", "name": "message.prompt", "value": "={{ ($json?.message?.text ?? \"\").replace(/^\\/image\\s*/i, \"\").trim() }}", "type": "string"},
+            {"id": "message-chat-id", "name": "message.chat_id", "value": "={{ $json?.message?.chat?.id ?? \"\" }}", "type": "string"},
+            {"id": "message-user-name", "name": "message.user_name", "value": "={{ $json?.message?.from?.first_name ?? \"пользователь\" }}", "type": "string"}
+          ]
+        },
+        "includeOtherFields": true,
+        "options": {"dotNotation": true}
+      }
+    },
+    {
+      "id": "runtime-settings",
+      "name": "Runtime Settings",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [800, 360],
+      "parameters": {
+        "mode": "manual",
+        "assignments": {
+          "assignments": [
+            {"id": "model-temperature", "name": "model_temperature", "value": 0.8, "type": "number"},
+            {"id": "token-length", "name": "token_length", "value": 500, "type": "number"},
+            {"id": "system-command", "name": "system_command", "value": "Ты — дружелюбный Telegram-ассистент. Отвечай кратко и на языке пользователя. Для команды /start поприветствуй пользователя и объясни команды /start и /image. Не выдумывай факты.", "type": "string"},
+            {"id": "bot-typing", "name": "bot_typing", "value": "={{ $json.message.command === \"/image\" ? \"upload_photo\" : \"typing\" }}", "type": "string"}
+          ]
+        },
+        "includeOtherFields": true
+      }
+    },
+    {
+      "id": "send-chat-action",
+      "name": "Send Chat Action",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [1040, 224],
+      "parameters": {
+        "resource": "message",
+        "operation": "sendChatAction",
+        "chatId": "={{ $json.message.chat_id }}",
+        "action": "={{ $json.bot_typing }}"
+      }
+    },
+    {
+      "id": "wait-chat-action",
+      "name": "Wait for Chat Action",
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3.2,
+      "position": [1360, 360],
+      "parameters": {
+        "mode": "chooseBranch",
+        "useDataOfInput": "1"
+      }
+    },
+    {
+      "id": "route-command",
+      "name": "Route Command",
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3.4,
+      "position": [1640, 360],
+      "parameters": {
+        "mode": "rules",
+        "rules": {
+          "values": [
+            {
+              "renameOutput": true,
+              "outputKey": "start",
+              "conditions": {
+                "options": {"caseSensitive": false, "leftValue": "", "typeValidation": "strict"},
+                "conditions": [{"leftValue": "={{ $json.message.command }}", "operator": {"type": "string", "operation": "equals"}, "rightValue": "/start"}],
+                "combinator": "and"
+              }
+            },
+            {
+              "renameOutput": true,
+              "outputKey": "image",
+              "conditions": {
+                "options": {"caseSensitive": false, "leftValue": "", "typeValidation": "strict"},
+                "conditions": [{"leftValue": "={{ $json.message.command }}", "operator": {"type": "string", "operation": "equals"}, "rightValue": "/image"}],
+                "combinator": "and"
+              }
+            }
+          ]
+        },
+        "options": {"fallbackOutput": "extra", "renameFallbackOutput": "fallback"}
+      }
+    },
+    {
+      "id": "generate-start-reply",
+      "name": "Generate Start Reply",
+      "type": "@n8n/n8n-nodes-langchain.openAi",
+      "typeVersion": 2.3,
+      "position": [1940, 180],
+      "parameters": {
+        "resource": "text",
+        "operation": "response",
+        "modelId": {"__rl": true, "mode": "list", "value": "gpt-4.1", "cachedResultName": "GPT-4.1"},
+        "responses": {"values": [
+          {"role": "system", "type": "text", "content": "={{ $json.system_command }}"},
+          {"role": "user", "type": "text", "content": "={{ \"Пользователь отправил команду: \" + $json.message.text + \". Подготовь приветственное сообщение для Telegram.\" }}"}
+        ]},
+        "simplify": true,
+        "options": {
+          "maxTokens": "={{ $json.token_length }}",
+          "temperature": "={{ $json.model_temperature }}",
+          "textFormat": {"textOptions": {"type": "text", "verbosity": "medium"}}
+        }
+      }
+    },
+    {
+      "id": "send-start-reply",
+      "name": "Send Start Reply",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [2240, 180],
+      "parameters": {
+        "resource": "message",
+        "operation": "sendMessage",
+        "chatId": "={{ $('Normalize Message').item.json.message.chat_id }}",
+        "text": "={{ $json.output?.[0]?.content?.find(c => c.type === \"output_text\")?.text ?? $json.output_text ?? $json.text ?? \"Ответ модели не найден\" }}",
+        "additionalFields": {"appendAttribution": false}
+      }
+    },
+    {
+      "id": "generate-image",
+      "name": "Generate Image",
+      "type": "@n8n/n8n-nodes-langchain.openAi",
+      "typeVersion": 2.3,
+      "position": [1940, 360],
+      "parameters": {
+        "resource": "image",
+        "operation": "generate",
+        "modelId": {"__rl": true, "mode": "list", "value": "gpt-image-1-mini", "cachedResultName": "GPT-IMAGE-1-MINI"},
+        "prompt": "={{ $json.message.prompt || \"простая иллюстрация дружелюбного Telegram-ассистента\" }}",
+        "options": {"quality": "medium", "size": "1024x1024", "binaryPropertyOutput": "data"}
+      }
+    },
+    {
+      "id": "send-generated-image",
+      "name": "Send Generated Image",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [2240, 360],
+      "parameters": {
+        "resource": "message",
+        "operation": "sendPhoto",
+        "chatId": "={{ $('Normalize Message').item.json.message.chat_id }}",
+        "binaryData": true,
+        "binaryPropertyName": "data",
+        "additionalFields": {"caption": "={{ 'Промпт: ' + $('Normalize Message').item.json.message.prompt }}"}
+      }
+    },
+    {
+      "id": "send-fallback",
+      "name": "Send Fallback",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [1940, 560],
+      "parameters": {
+        "resource": "message",
+        "operation": "sendMessage",
+        "chatId": "={{ $json.message.chat_id }}",
+        "text": "Извините, поддерживаются команды /start и /image <описание>.",
+        "additionalFields": {"appendAttribution": false}
+      }
+    },
+    {
+      "id": "about-workflow",
+      "name": "About this workflow",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [190, 120],
+      "parameters": {
+        "content": "## Telegram AI Assistant\nNormalizes Telegram messages, shows chat activity, routes /start and /image commands, generates OpenAI text or image output, and handles unsupported commands without an unnecessary AI call.",
+        "width": 760,
+        "height": 180
+      }
+    }
+  ]
+}
